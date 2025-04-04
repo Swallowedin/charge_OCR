@@ -53,12 +53,13 @@ class ChargesAnalyzer:
     à partir de différents formats (Excel, CSV, PDF) en utilisant l'OCR et GPT-4o-mini.
     """
     
-    def __init__(self, api_key=None):
+    def __init__(self, api_key=None, ocr_api_key=None):
         """
         Initialise l'analyseur de charges.
         
         Args:
             api_key (str, optional): Clé API OpenAI.
+            ocr_api_key (str, optional): Clé API OCR (si utilisation d'une API OCR externe).
         """
         self.api_key = api_key
         if not self.api_key:
@@ -66,6 +67,9 @@ class ChargesAnalyzer:
             
         # Initialiser le client OpenAI
         self.client = OpenAI(api_key=self.api_key)
+        
+        # Stocker la clé API OCR si fournie
+        self.ocr_api_key = ocr_api_key
         
         # Configuration de Tesseract OCR pour Streamlit Cloud
         # Dans Streamlit Cloud, nous devons utiliser pytesseract avec des configurations spécifiques
@@ -390,8 +394,20 @@ def main():
     # Sidebar pour la configuration
     st.sidebar.title("Configuration")
     
-    # Clé API OpenAI
-    api_key = st.sidebar.text_input("Clé API OpenAI", type="password")
+    # Récupération des clés API depuis les secrets de Streamlit
+    try:
+        api_key = st.secrets["OPENAI_API_KEY"]
+        st.sidebar.success("✅ Clé API OpenAI chargée depuis les secrets")
+    except Exception as e:
+        st.sidebar.error("❌ Impossible de charger la clé API OpenAI depuis les secrets")
+        api_key = st.sidebar.text_input("Clé API OpenAI (secours)", type="password")
+        
+    # Récupération de la clé OCR API si disponible
+    try:
+        ocr_api_key = st.secrets["OCR_API_KEY"]
+        st.sidebar.success("✅ Clé API OCR chargée depuis les secrets")
+    except Exception as e:
+        ocr_api_key = None
     
     # Informations supplémentaires dans la sidebar
     st.sidebar.markdown("---")
@@ -429,13 +445,13 @@ def main():
         # Bouton pour lancer l'analyse
         if st.button("Analyser le document"):
             if not api_key:
-                st.error("Veuillez entrer votre clé API OpenAI dans la barre latérale.")
+                st.error("Aucune clé API OpenAI disponible. Vérifiez les secrets Streamlit ou entrez une clé manuellement.")
             else:
                 try:
                     # Afficher un spinner pendant l'analyse
                     with st.spinner("Analyse en cours, veuillez patienter..."):
-                        # Initialiser l'analyseur
-                        analyzer = ChargesAnalyzer(api_key=api_key)
+                        # Initialiser l'analyseur avec les deux clés API
+                        analyzer = ChargesAnalyzer(api_key=api_key, ocr_api_key=ocr_api_key)
                         
                         # Traiter le fichier
                         results = analyzer.process_file(uploaded_file)
@@ -444,8 +460,22 @@ def main():
                         display_results(results)
                 except Exception as e:
                     st.error(f"Une erreur est survenue: {str(e)}")
+                    st.exception(e)  # Affiche la trace complète de l'erreur pour le débogage
 
 if __name__ == "__main__":
+    # Afficher les informations sur les secrets disponibles (sans révéler les valeurs)
+    st.sidebar.markdown("### État des secrets")
+    secrets_status = {
+        "OPENAI_API_KEY": "OPENAI_API_KEY" in st.secrets if hasattr(st, "secrets") else False,
+        "OCR_API_KEY": "OCR_API_KEY" in st.secrets if hasattr(st, "secrets") else False
+    }
+    
+    for secret_name, is_available in secrets_status.items():
+        if is_available:
+            st.sidebar.success(f"✅ {secret_name} configuré")
+        else:
+            st.sidebar.warning(f"⚠️ {secret_name} non configuré")
+    
     # Pour les erreurs liées à l'OCR sur Streamlit Cloud
     try:
         import pytesseract
