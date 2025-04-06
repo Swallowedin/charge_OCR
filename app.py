@@ -126,7 +126,7 @@ class ChargesAnalyzer:
                 st.warning("Tentative d'installation de poppler...")
                 
                 # Afficher une information pour l'installation manuelle de poppler dans requirements.txt
-                st.info("Assurez-vous que 'poppler-utils' est installé sur votre serveur Streamlit Cloud. Ajoutez les dépendances dans requirements.txt")
+                st.info("Assurez-vous que 'poppler-utils' est installé sur votre serveur Streamlit Cloud. Ajoutez les dépendances dans packages.txt")
                 return {"error": "L'installation de poppler est requise pour traiter les PDFs."}
         
             extracted_text = ""
@@ -298,7 +298,8 @@ class ChargesAnalyzer:
         Sois particulièrement attentif aux montants précédés de signes négatifs (-) qui indiquent des crédits ou des provisions.
         Pour les redditions de charges, le solde peut être positif (à la charge du locataire) ou négatif (en faveur du locataire).
         
-        Réponds uniquement avec le JSON structuré des résultats.
+        IMPORTANT: Réponds uniquement avec le JSON structuré des résultats, sans aucun texte d'introduction ni formatage supplémentaire comme des backticks.
+        Ne pas inclure "```json" ni "```" dans ta réponse. Renvoie uniquement le JSON pur.
         """
         
         try:
@@ -306,7 +307,7 @@ class ChargesAnalyzer:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "Tu es un assistant spécialisé dans l'analyse de documents financiers immobiliers."},
+                    {"role": "system", "content": "Tu es un assistant spécialisé dans l'analyse de documents financiers immobiliers. Tu réponds uniquement en JSON valide sans formatage supplémentaire."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1
@@ -315,28 +316,83 @@ class ChargesAnalyzer:
             # Extraire la réponse
             analysis_text = response.choices[0].message.content
             
-            # Nettoyer la réponse pour extraire uniquement le JSON
-            json_start = analysis_text.find('{')
-            json_end = analysis_text.rfind('}') + 1
+            # Tenter d'extraire le JSON avec notre méthode sécurisée
+            analysis_result = self._extract_json_safely(analysis_text)
             
-            if json_start >= 0 and json_end > json_start:
-                json_text = analysis_text[json_start:json_end]
-                try:
-                    # Analyser le JSON
-                    analysis_result = json.loads(json_text)
-                    st.success("Analyse réussie avec l'IA!")
-                    return analysis_result
-                except json.JSONDecodeError as e:
-                    st.error(f"Erreur de décodage JSON: {str(e)}")
-                    return {"error": "Format de réponse invalide", "raw_response": analysis_text}
+            if analysis_result:
+                st.success("Analyse réussie avec l'IA!")
+                return analysis_result
             else:
-                st.error("Pas de JSON trouvé dans la réponse")
-                return {"error": "Pas de JSON trouvé dans la réponse", "raw_response": analysis_text}
+                st.error("Impossible d'extraire un JSON valide de la réponse")
+                st.text_area("Réponse brute:", analysis_text, height=300)
+                return {"error": "Format de réponse invalide", "raw_response": analysis_text}
             
         except Exception as e:
             st.error(f"Erreur lors de l'analyse: {str(e)}")
             return {"error": str(e)}
+    
+    def _extract_json_safely(self, text):
+        """
+        Tente plusieurs approches pour extraire un JSON valide d'un texte.
+        
+        Args:
+            text (str): Texte contenant potentiellement du JSON.
             
+        Returns:
+            dict: Le dictionnaire JSON extrait ou None si l'extraction échoue.
+        """
+        # Supprimer tous les backticks et mentions "json"
+        cleaned_text = text.replace('```json', '').replace('```', '').replace('json', '').strip()
+        
+        # Approche 1: Essayer de charger directement le texte nettoyé
+        try:
+            return json.loads(cleaned_text)
+        except json.JSONDecodeError:
+            pass
+        
+        # Approche 2: Chercher les délimiteurs {} les plus externes
+        try:
+            start_idx = cleaned_text.find('{')
+            end_idx = cleaned_text.rfind('}') + 1
+            
+            if start_idx >= 0 and end_idx > start_idx:
+                json_str = cleaned_text[start_idx:end_idx]
+                return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # Approche 3: Correction des problèmes de guillemets potentiels
+        try:
+            # Remplacer les guillemets simples par des guillemets doubles
+            fixed_text = cleaned_text.replace("'", '"')
+            return json.loads(fixed_text)
+        except json.JSONDecodeError:
+            pass
+        
+        # Approche 4: Utiliser une expression régulière pour extraire le JSON
+        try:
+            json_pattern = r'(\{.*\})'
+            match = re.search(json_pattern, cleaned_text, re.DOTALL)
+            if match:
+                return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+        
+        # Approche 5: Tentative de correction manuelle de formats JSON courants
+        try:
+            # Correction de certaines erreurs de formatage fréquentes
+            corrected_text = cleaned_text
+            # Remplacer les virgules à la fin des objets
+            corrected_text = re.sub(r',\s*}', '}', corrected_text)
+            # Ajouter des guillemets aux clés non quotées
+            corrected_text = re.sub(r'(\w+):', r'"\1":', corrected_text)
+            return json.loads(corrected_text)
+        except json.JSONDecodeError:
+            pass
+        
+        # Si toutes les tentatives échouent
+        return None
+    
     def _extract_charges_data(self, text):
         """
         Méthode d'extraction directe des données de charges sans recourir à l'API.
