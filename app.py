@@ -10,11 +10,16 @@ from PIL import Image
 import pytesseract
 from pdf2image import convert_from_bytes
 import openai
-import matplotlib.pyplot as plt
 import plotly.express as px
 
 # Configuration de la page Streamlit
 st.set_page_config(page_title="Analyseur de reddition de charges", layout="wide")
+
+# Configuration des secrets (Streamlit Cloud)
+@st.cache_resource
+def initialize_openai():
+    client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+    return client
 
 # =============== FONCTIONS UTILITAIRES ===============
 
@@ -156,126 +161,118 @@ with st.expander("ℹ️ À propos de cet outil", expanded=True):
     4. Les résultats sont présentés sous forme de tableaux et graphiques interactifs
     """)
 
-# Configuration de l'API OpenAI
-api_key = st.sidebar.text_input("Clé API OpenAI", type="password")
-if not api_key:
-    st.sidebar.warning("Veuillez entrer votre clé API OpenAI pour utiliser l'outil")
-
-# Configuration de l'OCR
-ocr_lang = st.sidebar.selectbox("Langue OCR", ["fra", "eng"], index=0)
-if ocr_lang != "fra":
-    st.sidebar.warning("La langue française (fra) est recommandée pour les documents français")
-
 uploaded_file = st.file_uploader("Téléchargez un document de reddition de charges (PDF)", type=["pdf"])
 
-if uploaded_file is not None and api_key:
-    # Initialisation du client OpenAI
-    client = openai.OpenAI(api_key=api_key)
-    
-    with st.spinner("Traitement du document en cours..."):
-        # Conversion du PDF en images
-        images = convert_pdf_to_images(uploaded_file)
+if uploaded_file is not None:
+    try:
+        # Initialisation du client OpenAI avec les secrets Streamlit
+        client = initialize_openai()
         
-        if images:
-            # Affichage des pages du document
-            tabs = st.tabs([f"Page {i+1}" for i in range(len(images))])
-            for i, tab in enumerate(tabs):
-                with tab:
-                    st.image(images[i], caption=f"Page {i+1}", use_column_width=True)
+        with st.spinner("Traitement du document en cours..."):
+            # Conversion du PDF en images
+            images = convert_pdf_to_images(uploaded_file)
             
-            # Extraction du texte
-            with st.spinner("Extraction du texte..."):
-                extracted_text = extract_text_from_images(images)
+            if images:
+                # Affichage des pages du document
+                tabs = st.tabs([f"Page {i+1}" for i in range(len(images))])
+                for i, tab in enumerate(tabs):
+                    with tab:
+                        st.image(images[i], caption=f"Page {i+1}", use_column_width=True)
                 
-                with st.expander("Texte brut extrait (pour débogage)", expanded=False):
-                    st.text_area("", extracted_text, height=200)
-            
-            # Analyse avec GPT
-            with st.spinner("Analyse des informations avec IA..."):
-                analysis_result = analyze_with_gpt(client, extracted_text)
+                # Extraction du texte
+                with st.spinner("Extraction du texte..."):
+                    extracted_text = extract_text_from_images(images)
+                    
+                    with st.expander("Texte brut extrait (pour débogage)", expanded=False):
+                        st.text_area("", extracted_text, height=200)
                 
-                if analysis_result:
-                    # Affichage des résultats structurés
-                    col1, col2 = st.columns(2)
+                # Analyse avec GPT
+                with st.spinner("Analyse des informations avec IA..."):
+                    analysis_result = analyze_with_gpt(client, extracted_text)
                     
-                    with col1:
-                        st.subheader("Informations générales")
-                        st.write(f"**Propriétaire/Gestionnaire:** {analysis_result.get('Information du propriétaire/gestionnaire', {}).get('nom', 'Non détecté')}")
-                        st.write(f"**Adresse:** {analysis_result.get('Information du propriétaire/gestionnaire', {}).get('adresse', 'Non détectée')}")
-                        st.write(f"**Période:** {analysis_result.get('Période concernée', {}).get('début', 'Non détectée')} au {analysis_result.get('Période concernée', {}).get('fin', 'Non détectée')}")
-                        st.write(f"**Référence document:** {analysis_result.get('Références du document', {}).get('numéro', 'Non détectée')}")
-                        st.write(f"**Date d'émission:** {analysis_result.get('Références du document', {}).get('date', 'Non détectée')}")
-                    
-                    with col2:
-                        st.subheader("Montants")
+                    if analysis_result:
+                        # Affichage des résultats structurés
+                        col1, col2 = st.columns(2)
                         
-                        # Extraire et formater les montants
-                        provisions = clean_monetary_value(analysis_result.get('Montant total des provisions versées', 0))
-                        charges = clean_monetary_value(analysis_result.get('Montant total des charges réelles', 0))
+                        with col1:
+                            st.subheader("Informations générales")
+                            st.write(f"**Propriétaire/Gestionnaire:** {analysis_result.get('Information du propriétaire/gestionnaire', {}).get('nom', 'Non détecté')}")
+                            st.write(f"**Adresse:** {analysis_result.get('Information du propriétaire/gestionnaire', {}).get('adresse', 'Non détectée')}")
+                            st.write(f"**Période:** {analysis_result.get('Période concernée', {}).get('début', 'Non détectée')} au {analysis_result.get('Période concernée', {}).get('fin', 'Non détectée')}")
+                            st.write(f"**Référence document:** {analysis_result.get('Références du document', {}).get('numéro', 'Non détectée')}")
+                            st.write(f"**Date d'émission:** {analysis_result.get('Références du document', {}).get('date', 'Non détectée')}")
                         
-                        solde_info = analysis_result.get('Solde', {})
-                        if isinstance(solde_info, dict):
-                            solde_value = clean_monetary_value(solde_info.get('montant', 0))
-                            solde_type = solde_info.get('type', '')
+                        with col2:
+                            st.subheader("Montants")
+                            
+                            # Extraire et formater les montants
+                            provisions = clean_monetary_value(analysis_result.get('Montant total des provisions versées', 0))
+                            charges = clean_monetary_value(analysis_result.get('Montant total des charges réelles', 0))
+                            
+                            solde_info = analysis_result.get('Solde', {})
+                            if isinstance(solde_info, dict):
+                                solde_value = clean_monetary_value(solde_info.get('montant', 0))
+                                solde_type = solde_info.get('type', '')
+                            else:
+                                solde_value = clean_monetary_value(solde_info)
+                                solde_type = 'Non précisé'
+                            
+                            # Afficher les métriques
+                            st.metric("Provisions versées", f"{provisions:,.2f} €".replace(',', ' '))
+                            st.metric("Charges réelles", f"{charges:,.2f} €".replace(',', ' '))
+                            
+                            delta_color = "normal"
+                            if "créditeur" in str(solde_type).lower() or "en votre faveur" in str(solde_type).lower():
+                                delta_color = "inverse"
+                            
+                            st.metric("Solde", f"{solde_value:,.2f} €".replace(',', ' '), 
+                                     delta=solde_type, 
+                                     delta_color=delta_color)
+                        
+                        # Détail des charges sous forme de tableau
+                        st.subheader("Détail des charges")
+                        
+                        charges_detail = analysis_result.get('Détail des charges par catégorie', [])
+                        if charges_detail and isinstance(charges_detail, list):
+                            # Création d'un DataFrame pour afficher les charges
+                            charges_df = pd.DataFrame(charges_detail)
+                            st.dataframe(charges_df, use_container_width=True)
+                            
+                            # Visualisation des charges
+                            try:
+                                chart_data = prepare_charges_for_chart(analysis_result)
+                                if not chart_data.empty:
+                                    st.subheader("Répartition des charges")
+                                    fig = px.bar(chart_data, x='Catégorie', y='Montant', 
+                                               title='Répartition des charges par catégorie',
+                                               color='Catégorie')
+                                    fig.update_layout(xaxis_title='Catégorie', 
+                                                    yaxis_title='Montant (€)',
+                                                    xaxis_tickangle=-45)
+                                    st.plotly_chart(fig, use_container_width=True)
+                            except Exception as e:
+                                st.warning(f"Impossible de générer le graphique : {e}")
                         else:
-                            solde_value = clean_monetary_value(solde_info)
-                            solde_type = 'Non précisé'
+                            st.warning("Aucun détail des charges n'a été extrait ou le format n'est pas reconnu.")
                         
-                        # Afficher les métriques
-                        st.metric("Provisions versées", f"{provisions:,.2f} €".replace(',', ' '))
-                        st.metric("Charges réelles", f"{charges:,.2f} €".replace(',', ' '))
+                        # Affichage du JSON complet
+                        with st.expander("Résultat complet (JSON)", expanded=False):
+                            st.json(analysis_result)
                         
-                        delta_color = "normal"
-                        if "créditeur" in str(solde_type).lower() or "en votre faveur" in str(solde_type).lower():
-                            delta_color = "inverse"
-                        
-                        st.metric("Solde", f"{solde_value:,.2f} €".replace(',', ' '), 
-                                 delta=solde_type, 
-                                 delta_color=delta_color)
-                    
-                    # Détail des charges sous forme de tableau
-                    st.subheader("Détail des charges")
-                    
-                    charges_detail = analysis_result.get('Détail des charges par catégorie', [])
-                    if charges_detail and isinstance(charges_detail, list):
-                        # Création d'un DataFrame pour afficher les charges
-                        charges_df = pd.DataFrame(charges_detail)
-                        st.dataframe(charges_df, use_container_width=True)
-                        
-                        # Visualisation des charges
-                        try:
-                            chart_data = prepare_charges_for_chart(analysis_result)
-                            if not chart_data.empty:
-                                st.subheader("Répartition des charges")
-                                fig = px.bar(chart_data, x='Catégorie', y='Montant', 
-                                           title='Répartition des charges par catégorie',
-                                           color='Catégorie')
-                                fig.update_layout(xaxis_title='Catégorie', 
-                                                yaxis_title='Montant (€)',
-                                                xaxis_tickangle=-45)
-                                st.plotly_chart(fig, use_container_width=True)
-                        except Exception as e:
-                            st.warning(f"Impossible de générer le graphique : {e}")
+                        # Export des données
+                        st.download_button(
+                            label="Télécharger l'analyse (JSON)",
+                            data=json.dumps(analysis_result, indent=2, ensure_ascii=False),
+                            file_name=f"analyse_reddition_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                            mime="application/json"
+                        )
                     else:
-                        st.warning("Aucun détail des charges n'a été extrait ou le format n'est pas reconnu.")
-                    
-                    # Affichage du JSON complet
-                    with st.expander("Résultat complet (JSON)", expanded=False):
-                        st.json(analysis_result)
-                    
-                    # Export des données
-                    st.download_button(
-                        label="Télécharger l'analyse (JSON)",
-                        data=json.dumps(analysis_result, indent=2, ensure_ascii=False),
-                        file_name=f"analyse_reddition_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json"
-                    )
-                else:
-                    st.error("Échec de l'analyse du document. Veuillez réessayer avec un autre document.")
-        else:
-            st.error("Impossible de traiter le PDF. Vérifiez que le fichier est valide.")
-elif not api_key and uploaded_file:
-    st.warning("Veuillez entrer votre clé API OpenAI dans la barre latérale pour analyser ce document.")
+                        st.error("Échec de l'analyse du document. Veuillez réessayer avec un autre document.")
+            else:
+                st.error("Impossible de traiter le PDF. Vérifiez que le fichier est valide.")
+    except Exception as e:
+        st.error(f"Une erreur est survenue : {e}")
+        st.info("Vérifiez que la clé API OpenAI est correctement configurée dans les secrets Streamlit.")
 
 # Ajout d'un footer
 st.markdown("---")
