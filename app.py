@@ -14,36 +14,29 @@ from pathlib import Path
 import base64
 import re
 
-# Titre et configuration de la page
-st.set_page_config(
-    page_title="Analyseur de Charges - Baux Commerciaux",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
+# Configuration du logging
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("charges_analyzer.log"),
+        logging.StreamHandler()
+    ]
 )
+
+logger = logging.getLogger("charges_analyzer")
 
 # CSS personnalisé
 st.markdown("""
 <style>
     .main {
-        padding: 2rem;
-    }
-    .stTabs [data-baseweb="tab-panel"] {
-        padding-top: 1rem;
+        padding: 1rem;
     }
     .reportview-container .main .block-container {
-        max-width: 1200px;
+        max-width: 1000px;
         padding-top: 2rem;
         padding-bottom: 2rem;
-    }
-    .stAlert {
-        margin-top: 1rem;
-    }
-    .results-container {
-        background-color: #f8f9fa;
-        border-radius: 5px;
-        padding: 1.5rem;
-        margin-top: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -54,15 +47,12 @@ class ChargesAnalyzer:
     à partir de différents formats (Excel, CSV, PDF) en utilisant l'OCR et GPT-4o-mini.
     """
     
-    def __init__(self, api_key=None, ocr_api_key=None, use_ai=True, tesseract_config=None):
+    def __init__(self, api_key=None):
         """
         Initialise l'analyseur de charges.
         
         Args:
             api_key (str, optional): Clé API OpenAI.
-            ocr_api_key (str, optional): Clé API OCR (si utilisation d'une API OCR externe).
-            use_ai (bool, optional): Indique si l'IA doit être utilisée pour l'analyse.
-            tesseract_config (str, optional): Configuration Tesseract OCR personnalisée.
         """
         self.api_key = api_key
         if not self.api_key:
@@ -71,15 +61,8 @@ class ChargesAnalyzer:
         # Initialiser le client OpenAI
         self.client = OpenAI(api_key=self.api_key)
         
-        # Stocker la clé API OCR si fournie
-        self.ocr_api_key = ocr_api_key
-        
-        # Utilisation de l'IA pour l'analyse
-        self.use_ai = use_ai
-        
-        # Configuration de Tesseract OCR pour Streamlit Cloud
-        # Dans Streamlit Cloud, nous devons utiliser pytesseract avec des configurations spécifiques
-        self.tesseract_config = tesseract_config or r'--oem 3 --psm 6'
+        # Configuration de Tesseract OCR
+        self.tesseract_config = r'--oem 3 --psm 6'
     
     def process_file(self, uploaded_file):
         """
@@ -120,7 +103,7 @@ class ChargesAnalyzer:
     
     def analyze_pdf(self, pdf_path):
         """
-        Analyse un fichier PDF en utilisant l'OCR et GPT-4o-mini.
+        Analyse un fichier PDF en utilisant l'OCR et l'extraction directe ou GPT-4o-mini.
         
         Args:
             pdf_path (str): Chemin vers le fichier PDF.
@@ -171,8 +154,17 @@ class ChargesAnalyzer:
                 # Mettre à jour la barre de progression
                 progress_bar.progress((i + 1) / total_pages)
         
-            # Analyser le texte extrait avec GPT-4o-mini
-            return self._analyze_with_gpt(extracted_text, source_type="PDF")
+            # D'abord essayer l'extraction directe
+            direct_result = self._extract_charges_data(extracted_text)
+            
+            # Vérifier si l'extraction directe a donné des résultats satisfaisants
+            if self._is_extraction_complete(direct_result):
+                st.success("Analyse réussie avec l'extraction directe!")
+                return direct_result
+            else:
+                # Sinon, utiliser GPT-4o-mini
+                st.info("Utilisation de l'IA pour compléter l'analyse...")
+                return self._analyze_with_gpt(extracted_text, source_type="PDF")
             
         except Exception as e:
             st.error(f"Erreur lors de l'analyse du PDF: {str(e)}")
@@ -192,6 +184,7 @@ class ChargesAnalyzer:
         
         try:
             # Lire toutes les feuilles du fichier Excel
+            import openpyxl
             excel_data = {}
             xlsx = openpyxl.load_workbook(excel_path, data_only=True)
             
@@ -210,8 +203,17 @@ class ChargesAnalyzer:
             # Concaténer toutes les feuilles en un seul texte
             combined_text = "\n\n".join([f"--- {sheet} ---\n{text}" for sheet, text in excel_data.items()])
             
-            # Analyser avec GPT-4o-mini
-            return self._analyze_with_gpt(combined_text, source_type="Excel")
+            # D'abord essayer l'extraction directe
+            direct_result = self._extract_charges_data(combined_text)
+            
+            # Vérifier si l'extraction directe a donné des résultats satisfaisants
+            if self._is_extraction_complete(direct_result):
+                st.success("Analyse réussie avec l'extraction directe!")
+                return direct_result
+            else:
+                # Sinon, utiliser GPT-4o-mini
+                st.info("Utilisation de l'IA pour compléter l'analyse...")
+                return self._analyze_with_gpt(combined_text, source_type="Excel")
             
         except Exception as e:
             st.error(f"Erreur lors de l'analyse du fichier Excel: {str(e)}")
@@ -242,8 +244,17 @@ class ChargesAnalyzer:
             # Convertir en texte
             csv_text = df.to_string(index=False)
             
-            # Analyser avec GPT-4o-mini
-            return self._analyze_with_gpt(csv_text, source_type="CSV")
+            # D'abord essayer l'extraction directe
+            direct_result = self._extract_charges_data(csv_text)
+            
+            # Vérifier si l'extraction directe a donné des résultats satisfaisants
+            if self._is_extraction_complete(direct_result):
+                st.success("Analyse réussie avec l'extraction directe!")
+                return direct_result
+            else:
+                # Sinon, utiliser GPT-4o-mini
+                st.info("Utilisation de l'IA pour compléter l'analyse...")
+                return self._analyze_with_gpt(csv_text, source_type="CSV")
             
         except Exception as e:
             st.error(f"Erreur lors de l'analyse du fichier CSV: {str(e)}")
@@ -291,18 +302,6 @@ class ChargesAnalyzer:
         """
         
         try:
-            # Tenter d'abord d'extraire les informations sans appeler l'API
-            # Particulièrement utile pour les formats standards comme les redditions de charges
-            result = self._extract_charges_data(text)
-            
-            # Si la méthode standard a donné des résultats satisfaisants, les utiliser
-            if self._is_extraction_complete(result):
-                st.success("Analyse réussie avec l'extraction directe!")
-                return result
-                
-            # Sinon, utiliser l'API OpenAI
-            st.info("Utilisation de l'IA pour compléter l'analyse...")
-            
             # Appeler l'API OpenAI
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -509,387 +508,57 @@ def display_results(results):
                 'Montant': list(repartition.values())
             })
             
-            # Nettoyer les montants pour le graphique
-            df['Montant_Numeric'] = df['Montant'].apply(
-                lambda x: float(str(x).replace('€', '').replace(',', '.').replace(' ', ''))
-                if isinstance(x, str) else float(x)
-            )
-            
-            # Trier par montant décroissant
-            df = df.sort_values('Montant_Numeric', ascending=False)
-            
-            # Afficher le tableau
-            st.dataframe(df[['Poste', 'Montant']])
-            
-            # Créer un graphique
-            chart_df = df.copy()
-            chart_df = chart_df.set_index('Poste')
-            st.bar_chart(chart_df[['Montant_Numeric']])
-        else:
-            st.write(repartition)
-    
-    # Bouton de téléchargement des résultats
-    st.markdown(download_json(results), unsafe_allow_html=True)
-    
-    # Afficher les résultats JSON bruts dans un expander
-    with st.expander("Voir les résultats bruts (JSON)"):
-        st.json(results) st.columns(2)
-    
-    with col1:
-        st.markdown("### Informations générales")
-        st.info(f"**Type de document:** {results.get('Type de document', 'Non spécifié')}")
-        st.info(f"**Période concernée:** {results.get('Année ou période concernée', 'Non spécifiée')}")
-        st.info(f"**Montant total des charges:** {results.get('Montant total des charges', 'Non spécifié')}")
-    
-    with col2:
-        st.markdown("### Informations financières")
-        st.info(f"**Quote-part du locataire:** {results.get('Quote-part du locataire', 'Non spécifiée')}")
-        st.info(f"**Montant facturé au locataire:** {results.get('Montant facturé au locataire', 'Non spécifié')}")
-        st.info(f"**Provisions déjà versées:** {results.get('Montant des provisions déjà versées', 'Non spécifié')}")
-        st.info(f"**Solde:** {results.get('Solde', 'Non spécifié')}")
-    
-    # Afficher la répartition des charges si disponible
-    if "Répartition des charges par poste" in results and results["Répartition des charges par poste"]:
-        st.markdown("### Répartition des charges par poste")
-        
-        # Convertir en dictionnaire si ce n'est pas déjà le cas
-        repartition = results["Répartition des charges par poste"]
-        if isinstance(repartition, str):
-            try:
-                repartition = json.loads(repartition)
-            except:
-                pass
-        
-        if isinstance(repartition, dict):
-            # Créer un DataFrame pour l'affichage
-            df = pd.DataFrame({
-                'Poste': list(repartition.keys()),
-                'Montant': list(repartition.values())
-            })
-            
-            # Nettoyer les montants pour le graphique
-            df['Montant_Numeric'] = df['Montant'].apply(
-                lambda x: float(str(x).replace('€', '').replace(',', '.').replace(' ', ''))
-                if isinstance(x, str) else float(x)
-            )
-            
-            # Trier par montant décroissant
-            df = df.sort_values('Montant_Numeric', ascending=False)
-            
-            # Afficher le tableau
-            st.dataframe(df[['Poste', 'Montant']])
-            
-            # Créer un graphique
-            chart_df = df.copy()
-            chart_df = chart_df.set_index('Poste')
-            st.bar_chart(chart_df[['Montant_Numeric']])
-        else:
-            st.write(repartition)
-    
-    # Bouton de téléchargement des résultats
-    st.markdown(download_json(results), unsafe_allow_html=True)
-    
-    # Afficher les résultats JSON bruts dans un expander
-    with st.expander("Voir les résultats bruts (JSON)"):
-        st.json(results) st.columns(2)
-    
-    with col1:
-        st.markdown("### Informations générales")
-        st.info(f"**Type de document:** {results.get('Type de document', 'Non spécifié')}")
-        st.info(f"**Période concernée:** {results.get('Année ou période concernée', 'Non spécifiée')}")
-        st.info(f"**Montant total des charges:** {results.get('Montant total des charges', 'Non spécifié')}")
-    
-    with col2:
-        st.markdown("### Informations financières")
-        st.info(f"**Quote-part du locataire:** {results.get('Quote-part du locataire', 'Non spécifiée')}")
-        st.info(f"**Montant facturé au locataire:** {results.get('Montant facturé au locataire', 'Non spécifié')}")
-        st.info(f"**Provisions déjà versées:** {results.get('Montant des provisions déjà versées', 'Non spécifié')}")
-        st.info(f"**Solde:** {results.get('Solde', 'Non spécifié')}")
-    
-    # Afficher la répartition des charges si disponible
-    if "Répartition des charges par poste" in results and results["Répartition des charges par poste"]:
-        st.markdown("### Répartition des charges par poste")
-        
-        # Convertir en dictionnaire si ce n'est pas déjà le cas
-        repartition = results["Répartition des charges par poste"]
-        if isinstance(repartition, str):
-            try:
-                repartition = json.loads(repartition)
-            except:
-                pass
-        
-        if isinstance(repartition, dict):
-            # Créer un DataFrame pour l'affichage
-            df = pd.DataFrame({
-                'Poste': list(repartition.keys()),
-                'Montant': list(repartition.values())
-            })
-            
             # Afficher le tableau
             st.dataframe(df)
-            
-            # Créer un graphique
-            st.bar_chart(df.set_index('Poste'))
         else:
             st.write(repartition)
     
     # Bouton de téléchargement des résultats
     st.markdown(download_json(results), unsafe_allow_html=True)
-    
-    # Afficher les résultats JSON bruts dans un expander
-    with st.expander("Voir les résultats bruts (JSON)"):
-        st.json(results)
 
 def main():
     """Fonction principale de l'application Streamlit."""
-    st.set_page_config(
-        page_title="Analyseur de Charges - Baux Commerciaux",
-        page_icon="📊",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
-    st.title("Analyseur de Tableaux de Charges pour Baux Commerciaux")
+    st.title("Analyseur de Redditions de Charges")
     st.markdown("""
-    Cette application analyse vos tableaux de charges et redditions de charges pour des baux commerciaux.
-    Téléchargez un fichier PDF, Excel ou CSV et obtenez une analyse détaillée grâce à l'OCR et à l'IA.
+    Cette application analyse précisément vos tableaux de charges et redditions de charges pour des baux commerciaux.
+    Téléchargez un fichier PDF, Excel ou CSV et obtenez une analyse complète.
     """)
     
-    # Sidebar pour la configuration
-    st.sidebar.title("Configuration")
-    
-    # Récupération des clés API depuis les secrets de Streamlit
+    # Récupération de la clé API depuis les secrets de Streamlit
     try:
         api_key = st.secrets["OPENAI_API_KEY"]
-        st.sidebar.success("✅ Clé API OpenAI chargée depuis les secrets")
     except Exception as e:
-        st.sidebar.error("❌ Impossible de charger la clé API OpenAI depuis les secrets")
-        api_key = st.sidebar.text_input("Clé API OpenAI (secours)", type="password")
+        api_key = st.text_input("Clé API OpenAI", type="password")
+    
+    # Zone principale
+    uploaded_file = st.file_uploader("Choisissez un fichier à analyser", type=["pdf", "xlsx", "xls", "csv"])
+    
+    if uploaded_file is not None:
+        # Afficher des informations sur le fichier téléchargé
+        st.info(f"Fichier chargé: {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
         
-    # Récupération de la clé OCR API si disponible
-    try:
-        ocr_api_key = st.secrets["OCR_API_KEY"]
-        st.sidebar.success("✅ Clé API OCR chargée depuis les secrets")
-    except Exception as e:
-        ocr_api_key = None
-    
-    # Paramètres d'analyse avancés
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Paramètres d'analyse")
-    
-    use_ai = st.sidebar.checkbox("Utiliser l'IA pour l'analyse", value=True, 
-                              help="Désactivez pour utiliser uniquement l'extraction directe (plus rapide mais moins précis)")
-    
-    ocr_quality = st.sidebar.select_slider(
-        "Qualité OCR", 
-        options=["Rapide", "Standard", "Précise"],
-        value="Standard",
-        help="Plus la qualité est élevée, plus l'analyse sera précise mais plus le temps de traitement sera long"
-    )
-    
-    # Ajouter un expander pour les informations techniques
-    with st.sidebar.expander("Informations techniques"):
-        st.markdown("""
-        - **Extraction directe** : analyse le document directement en utilisant des expressions régulières
-        - **Analyse IA** : utilise GPT-4o-mini pour une analyse plus approfondie
-        - **Qualité OCR** : affecte la précision de la reconnaissance de texte dans les PDFs
-        """)
-    
-    # Informations supplémentaires dans la sidebar
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("""
-    ## À propos
-    Cette application utilise:
-    - OCR (Reconnaissance Optique de Caractères) pour extraire le texte des PDFs
-    - GPT-4o-mini pour analyser le contenu
-    - Streamlit pour l'interface utilisateur
-    
-    ## Formats supportés
-    - PDF (avec extraction OCR)
-    - Excel (.xlsx, .xls)
-    - CSV
-    """)
-    
-    # Onglets principaux
-    tab1, tab2 = st.tabs(["Analyse simple", "Analyse comparative"])
-    
-    with tab1:
-        # Zone principale pour l'analyse simple
-        st.markdown("## Téléchargement du fichier")
-        uploaded_file = st.file_uploader("Choisissez un fichier à analyser", type=["pdf", "xlsx", "xls", "csv"], key="single_file")
-        
-        if uploaded_file is not None:
-            st.markdown("---")
-            
-            # Afficher des informations sur le fichier téléchargé
-            file_details = {
-                "Nom du fichier": uploaded_file.name,
-                "Type de fichier": uploaded_file.type,
-                "Taille": f"{uploaded_file.size / 1024:.2f} KB"
-            }
-            
-            st.markdown("### Détails du fichier")
-            for key, value in file_details.items():
-                st.info(f"**{key}:** {value}")
-            
-            # Bouton pour lancer l'analyse
-            if st.button("Analyser le document"):
-                if not api_key:
-                    st.error("Aucune clé API OpenAI disponible. Vérifiez les secrets Streamlit ou entrez une clé manuellement.")
-                else:
-                    try:
-                        # Afficher un spinner pendant l'analyse
-                        with st.spinner("Analyse en cours, veuillez patienter..."):
-                            # Configurer les options d'OCR selon le choix de qualité
-                            ocr_config = {
-                                "Rapide": "--oem 0 --psm 6",
-                                "Standard": "--oem 3 --psm 6",
-                                "Précise": "--oem 3 --psm 11 -l fra"
-                            }
-                            
-                            # Initialiser l'analyseur avec les paramètres configurés
-                            analyzer = ChargesAnalyzer(
-                                api_key=api_key, 
-                                ocr_api_key=ocr_api_key, 
-                                use_ai=use_ai,
-                                tesseract_config=ocr_config[ocr_quality]
-                            )
-                            
-                            # Traiter le fichier
-                            results = analyzer.process_file(uploaded_file)
-                            
-                            # Afficher les résultats
-                            display_results(results)
-                    except Exception as e:
-                        st.error(f"Une erreur est survenue: {str(e)}")
-                        st.exception(e)  # Affiche la trace complète de l'erreur pour le débogage
-    
-    with tab2:
-        # Zone pour l'analyse comparative
-        st.markdown("## Comparaison de documents")
-        st.markdown("""
-        Cette fonctionnalité vous permet de comparer deux documents de charges pour analyser les différences 
-        (par exemple, comparer deux années consécutives ou deux locataires différents).
-        """)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### Premier document")
-            uploaded_file1 = st.file_uploader("Choisissez le premier fichier", type=["pdf", "xlsx", "xls", "csv"], key="file1")
-        
-        with col2:
-            st.markdown("### Second document")
-            uploaded_file2 = st.file_uploader("Choisissez le second fichier", type=["pdf", "xlsx", "xls", "csv"], key="file2")
-        
-        if uploaded_file1 is not None and uploaded_file2 is not None:
-            if st.button("Comparer les documents"):
-                if not api_key:
-                    st.error("Aucune clé API OpenAI disponible. Vérifiez les secrets Streamlit ou entrez une clé manuellement.")
-                else:
-                    try:
-                        # Analyser le premier document
-                        with st.spinner("Analyse du premier document en cours..."):
-                            analyzer = ChargesAnalyzer(
-                                api_key=api_key, 
-                                ocr_api_key=ocr_api_key,
-                                use_ai=use_ai,
-                                tesseract_config=ocr_config[ocr_quality]
-                            )
-                            results1 = analyzer.process_file(uploaded_file1)
-                            
-                        # Analyser le second document
-                        with st.spinner("Analyse du second document en cours..."):
-                            results2 = analyzer.process_file(uploaded_file2)
+        # Bouton pour lancer l'analyse
+        if st.button("Analyser le document"):
+            if not api_key:
+                st.error("Veuillez fournir une clé API OpenAI.")
+            else:
+                try:
+                    # Afficher un spinner pendant l'analyse
+                    with st.spinner("Analyse en cours, veuillez patienter..."):
+                        # Initialiser l'analyseur
+                        analyzer = ChargesAnalyzer(api_key=api_key)
                         
-                        # Afficher une comparaison des résultats
-                        st.markdown("## Résultats de la comparaison")
+                        # Traiter le fichier
+                        results = analyzer.process_file(uploaded_file)
                         
-                        # Comparer les informations générales
-                        compare_cols = st.columns(2)
-                        with compare_cols[0]:
-                            st.markdown(f"### {uploaded_file1.name}")
-                            st.info(f"**Type de document:** {results1.get('Type de document', 'Non spécifié')}")
-                            st.info(f"**Période concernée:** {results1.get('Année ou période concernée', 'Non spécifiée')}")
-                            st.info(f"**Montant total des charges:** {results1.get('Montant total des charges', 'Non spécifié')}")
-                        
-                        with compare_cols[1]:
-                            st.markdown(f"### {uploaded_file2.name}")
-                            st.info(f"**Type de document:** {results2.get('Type de document', 'Non spécifié')}")
-                            st.info(f"**Période concernée:** {results2.get('Année ou période concernée', 'Non spécifiée')}")
-                            st.info(f"**Montant total des charges:** {results2.get('Montant total des charges', 'Non spécifié')}")
-                        
-                        # Comparer les répartitions de charges
-                        if ("Répartition des charges par poste" in results1 and 
-                            "Répartition des charges par poste" in results2):
-                            
-                            st.markdown("### Comparaison des postes de charges")
-                            
-                            repartition1 = results1["Répartition des charges par poste"]
-                            repartition2 = results2["Répartition des charges par poste"]
-                            
-                            # Convertir en dictionnaires si nécessaire
-                            if isinstance(repartition1, str):
-                                try: repartition1 = json.loads(repartition1)
-                                except: pass
-                            if isinstance(repartition2, str):
-                                try: repartition2 = json.loads(repartition2)
-                                except: pass
-                            
-                            if isinstance(repartition1, dict) and isinstance(repartition2, dict):
-                                # Créer un DataFrame pour la comparaison
-                                all_postes = list(set(list(repartition1.keys()) + list(repartition2.keys())))
-                                
-                                comparison_data = {
-                                    'Poste': all_postes,
-                                    'Document 1': [repartition1.get(poste, "N/A") for poste in all_postes],
-                                    'Document 2': [repartition2.get(poste, "N/A") for poste in all_postes],
-                                }
-                                
-                                df_comp = pd.DataFrame(comparison_data)
-                                
-                                # Convertir en valeurs numériques pour le calcul de la variation
-                                def convert_to_numeric(val):
-                                    if val == "N/A": 
-                                        return float('nan')
-                                    return float(str(val).replace('€', '').replace(',', '.').replace(' ', ''))
-                                
-                                df_comp['Valeur 1'] = df_comp['Document 1'].apply(convert_to_numeric)
-                                df_comp['Valeur 2'] = df_comp['Document 2'].apply(convert_to_numeric)
-                                
-                                # Calculer la variation
-                                df_comp['Variation'] = ((df_comp['Valeur 2'] - df_comp['Valeur 1']) / df_comp['Valeur 1'] * 100).round(2)
-                                df_comp['Variation'] = df_comp['Variation'].apply(lambda x: f"{x}%" if not pd.isna(x) else "N/A")
-                                
-                                # Afficher le tableau de comparaison
-                                st.dataframe(df_comp[['Poste', 'Document 1', 'Document 2', 'Variation']])
-                    
-                    except Exception as e:
-                        st.error(f"Une erreur est survenue lors de la comparaison: {str(e)}")
-                        st.exception(e)
+                        # Afficher les résultats
+                        display_results(results)
+                except Exception as e:
+                    st.error(f"Une erreur est survenue: {str(e)}")
 
 if __name__ == "__main__":
-    # Afficher les informations sur les secrets disponibles (sans révéler les valeurs)
-    st.sidebar.markdown("### État des secrets")
-    secrets_status = {
-        "OPENAI_API_KEY": "OPENAI_API_KEY" in st.secrets if hasattr(st, "secrets") else False,
-        "OCR_API_KEY": "OCR_API_KEY" in st.secrets if hasattr(st, "secrets") else False
-    }
-    
-    for secret_name, is_available in secrets_status.items():
-        if is_available:
-            st.sidebar.success(f"✅ {secret_name} configuré")
-        else:
-            st.sidebar.warning(f"⚠️ {secret_name} non configuré")
-    
-    # Pour les erreurs liées à l'OCR sur Streamlit Cloud
+    # Vérifier si tesseract est installé
     try:
-        import pytesseract
-    except ImportError:
-        st.error("La bibliothèque pytesseract n'est pas installée. Ajoutez-la à requirements.txt")
-    
-    try:
-        # Tester si tesseract est installé
         pytesseract.get_tesseract_version()
     except Exception as e:
         st.warning(f"Tesseract OCR n'est pas correctement configuré: {str(e)}")
