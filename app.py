@@ -295,8 +295,20 @@ class ChargesAnalyzer:
         7. Montant des provisions déjà versées : sommes déjà payées par le locataire
         8. Solde : différence entre les provisions et les charges réelles (créditeur ou débiteur)
         
-        Sois particulièrement attentif aux montants précédés de signes négatifs (-) qui indiquent des crédits ou des provisions.
-        Pour les redditions de charges, le solde peut être positif (à la charge du locataire) ou négatif (en faveur du locataire).
+        Renvoie le JSON avec les clés EXACTEMENT dans ce format standardisé :
+        {
+          "Type de document": "reddition de charges",
+          "Année ou période concernée": "01/01/2022 au 31/12/2022", 
+          "Montant total des charges": 28880.45,
+          "Répartition des charges par poste": {
+            "NETTOYAGE EXTERIEUR": 3903.08,
+            "DECHETS SECS": 2198.50
+          },
+          "Quote-part du locataire": "8565/2092.00 (365 jours)",
+          "Montant facturé au locataire": -2499.55,
+          "Montant des provisions déjà versées": -31380.00,
+          "Solde": -2499.55
+        }
         
         IMPORTANT: Réponds uniquement avec le JSON structuré des résultats, sans aucun texte d'introduction ni formatage supplémentaire comme des backticks.
         Ne pas inclure "```json" ni "```" dans ta réponse. Renvoie uniquement le JSON pur.
@@ -324,7 +336,7 @@ class ChargesAnalyzer:
                 return analysis_result
             else:
                 st.error("Impossible d'extraire un JSON valide de la réponse")
-                st.text_area("Réponse brute:", analysis_text, height=300)
+                st.text_area("Réponse brute:", analysis_text, height=300, key="raw_response_error")
                 return {"error": "Format de réponse invalide", "raw_response": analysis_text}
             
         except Exception as e:
@@ -359,6 +371,7 @@ class ChargesAnalyzer:
                 json_str = cleaned_text[start_idx:end_idx]
                 return json.loads(json_str)
         except json.JSONDecodeError:
+            st.text_area("Texte JSON problématique:", json_str, height=200, key="json_error_text")
             pass
         
         # Approche 3: Correction des problèmes de guillemets potentiels
@@ -525,7 +538,7 @@ def display_results(results):
     if "error" in results:
         st.error(f"Erreur lors de l'analyse: {results['error']}")
         if "raw_response" in results:
-            st.text_area("Réponse brute:", results["raw_response"], height=300)
+            st.text_area("Réponse brute:", results["raw_response"], height=300, key="raw_response_display")
         return
     
     # Normaliser les clés pour gérer différentes nomenclatures
@@ -547,13 +560,62 @@ def display_results(results):
     # Normaliser les clés
     for standard_key, possible_keys in key_mapping.items():
         for key in possible_keys:
-            if key in results:
-                normalized_results[standard_key] = results[key]
+            if key.lower() in [k.lower() for k in results.keys()]:
+                # Trouver la clé exacte (respectant la casse)
+                actual_key = next(k for k in results.keys() if k.lower() == key.lower())
+                normalized_results[standard_key] = results[actual_key]
                 break
         if standard_key not in normalized_results:
             normalized_results[standard_key] = "Non spécifié"
     
-    # Continuer avec l'affichage en utilisant les clés normalisées...
+    st.markdown("## Résultats de l'analyse")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### Informations générales")
+        st.info(f"**Type de document:** {normalized_results.get('Type de document', 'Non spécifié')}")
+        st.info(f"**Période concernée:** {normalized_results.get('Année ou période concernée', 'Non spécifiée')}")
+        st.info(f"**Montant total des charges:** {normalized_results.get('Montant total des charges', 'Non spécifié')}")
+    
+    with col2:
+        st.markdown("### Informations financières")
+        st.info(f"**Quote-part du locataire:** {normalized_results.get('Quote-part du locataire', 'Non spécifiée')}")
+        st.info(f"**Montant facturé au locataire:** {normalized_results.get('Montant facturé au locataire', 'Non spécifié')}")
+        st.info(f"**Provisions déjà versées:** {normalized_results.get('Montant des provisions déjà versées', 'Non spécifié')}")
+        st.info(f"**Solde:** {normalized_results.get('Solde', 'Non spécifié')}")
+    
+    # Afficher la répartition des charges si disponible
+    repartition_key = "Répartition des charges par poste"
+    if repartition_key in normalized_results and normalized_results[repartition_key]:
+        st.markdown("### Répartition des charges par poste")
+        
+        # Convertir en dictionnaire si ce n'est pas déjà le cas
+        repartition = normalized_results[repartition_key]
+        if isinstance(repartition, str):
+            try:
+                repartition = json.loads(repartition)
+            except:
+                pass
+        
+        if isinstance(repartition, dict):
+            # Créer un DataFrame pour l'affichage
+            df = pd.DataFrame({
+                'Poste': list(repartition.keys()),
+                'Montant': list(repartition.values())
+            })
+            
+            # Afficher le tableau
+            st.dataframe(df)
+        else:
+            st.write(repartition)
+    
+    # Afficher le JSON brut pour le débogage
+    with st.expander("Voir les résultats JSON bruts"):
+        st.json(results)
+    
+    # Bouton de téléchargement des résultats
+    st.markdown(download_json(results), unsafe_allow_html=True)
 
 def main():
     """Fonction principale de l'application Streamlit."""
@@ -566,20 +628,43 @@ def main():
     # Récupération de la clé API depuis les secrets de Streamlit
     try:
         api_key = st.secrets["OPENAI_API_KEY"]
+        st.sidebar.success("✅ Clé API OpenAI trouvée dans les secrets")
     except Exception as e:
+        st.sidebar.warning("⚠️ Clé API OpenAI non trouvée dans les secrets")
         api_key = st.text_input("Clé API OpenAI", type="password")
+    
+    # Informations dans la sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("""
+    ### À propos
+    Cette application permet d'analyser automatiquement :
+    - Redditions de charges
+    - Appels de charges
+    - Budgets prévisionnels
+    
+    ### Formats supportés
+    - PDF (avec OCR)
+    - Excel (.xlsx, .xls)
+    - CSV
+    """)
     
     # Zone principale
     uploaded_file = st.file_uploader("Choisissez un fichier à analyser", type=["pdf", "xlsx", "xls", "csv"])
     
     if uploaded_file is not None:
         # Afficher des informations sur le fichier téléchargé
-        st.info(f"Fichier chargé: {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
+        file_details = {
+            "Nom du fichier": uploaded_file.name,
+            "Type de fichier": uploaded_file.type,
+            "Taille": f"{uploaded_file.size / 1024:.1f} KB"
+        }
+        
+        st.info(f"**Fichier chargé:** {file_details['Nom du fichier']} ({file_details['Taille']})")
         
         # Bouton pour lancer l'analyse
         if st.button("Analyser le document"):
             if not api_key:
-                st.error("Veuillez fournir une clé API OpenAI.")
+                st.error("⚠️ Veuillez fournir une clé API OpenAI.")
             else:
                 try:
                     # Afficher un spinner pendant l'analyse
@@ -594,6 +679,7 @@ def main():
                         display_results(results)
                 except Exception as e:
                     st.error(f"Une erreur est survenue: {str(e)}")
+                    st.exception(e)  # Affiche la trace complète de l'erreur pour le débogage
 
 if __name__ == "__main__":
     # Vérifier si tesseract est installé
