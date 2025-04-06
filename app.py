@@ -346,6 +346,7 @@ class ChargesAnalyzer:
     def _extract_json_safely(self, text):
         """
         Tente plusieurs approches pour extraire un JSON valide d'un texte.
+        Cette version améliorée traite les cas spécifiques de répartition des charges.
         
         Args:
             text (str): Texte contenant potentiellement du JSON.
@@ -356,8 +357,53 @@ class ChargesAnalyzer:
         # Supprimer tous les backticks et mentions "json"
         cleaned_text = text.replace('```json', '').replace('```', '').replace('json', '').strip()
         
+        # Définir une fonction pour corriger le format de la répartition des charges
+        def traiter_repartition_charges(json_obj):
+            """Corrige le format de la répartition des charges si nécessaire."""
+            if not isinstance(json_obj, dict):
+                return json_obj
+                
+            if "Répartition des charges par poste" in json_obj and isinstance(json_obj["Répartition des charges par poste"], str):
+                repartition_str = json_obj["Répartition des charges par poste"]
+                repartition_dict = {}
+                
+                # Si c'est déjà un format JSON valide, essayer de le parser
+                if repartition_str.startswith('{') and repartition_str.endswith('}'):
+                    try:
+                        import json
+                        repartition_dict = json.loads(repartition_str)
+                        json_obj["Répartition des charges par poste"] = repartition_dict
+                        return json_obj
+                    except:
+                        # Si le parsing échoue, continuer avec la méthode manuelle
+                        repartition_str = repartition_str[1:-1]  # Enlever les accolades
+                    
+                # Format "POSTE1: VALEUR1, POSTE2: VALEUR2"
+                try:
+                    pairs = repartition_str.split(',')
+                    for pair in pairs:
+                        if ':' in pair:
+                            key, value = pair.split(':', 1)
+                            key = key.strip().strip('"\'')  # Enlever guillemets et espaces
+                            value = value.strip().strip('"\'')  # Enlever guillemets et espaces
+                            
+                            # Convertir la valeur en nombre si possible
+                            try:
+                                value = float(value.replace(' ', ''))
+                            except:
+                                pass  # Garder comme chaîne si la conversion échoue
+                                
+                            repartition_dict[key] = value
+                    
+                    json_obj["Répartition des charges par poste"] = repartition_dict
+                except Exception as e:
+                    # Logging de l'erreur pour debug
+                    import logging
+                    logging.error(f"Erreur lors du traitement de la répartition: {str(e)}")
+                    
+            return json_obj
+        
         # Prétraitement pour convertir les nombres avec format français (virgule) en format anglo-saxon (point)
-        # Cette étape est cruciale pour éviter l'erreur "Invalid format specifier"
         def convert_numbers_in_json(json_text):
             # Fonction pour remplacer les nombres avec virgule par des nombres avec point dans un JSON
             # Pattern qui cherche des nombres (ex: 3903,08) suivis d'une virgule ou d'un '}' ou d'un ']'
@@ -369,7 +415,8 @@ class ChargesAnalyzer:
         
         # Approche 1: Essayer de charger directement le texte nettoyé
         try:
-            return json.loads(cleaned_text)
+            result = json.loads(cleaned_text)
+            return traiter_repartition_charges(result)
         except json.JSONDecodeError:
             pass
         
@@ -382,19 +429,34 @@ class ChargesAnalyzer:
                 json_str = cleaned_text[start_idx:end_idx]
                 # Convertir les nombres avec virgule
                 json_str = convert_numbers_in_json(json_str)
-                return json.loads(json_str)
+                result = json.loads(json_str)
+                return traiter_repartition_charges(result)
         except json.JSONDecodeError:
             # Utiliser une clé unique pour chaque affichage de texte
             st.text_area("Texte JSON problématique:", cleaned_text, height=200, key="json_error_text_1")
             pass
         
-        # Approche 3: Correction des problèmes de guillemets et virgules dans les nombres
+        # Approche 3: Corriger les problèmes courants dans les JSON générés par l'IA
         try:
             # Remplacer les guillemets simples par des guillemets doubles
             fixed_text = cleaned_text.replace("'", '"')
-            # Convertir les nombres avec virgule
+            
+            # Ajouter des guillemets aux clés non quotées (pattern: key: value)
+            fixed_text = re.sub(r'(\w+):\s*', r'"\1": ', fixed_text)
+            
+            # Corriger le format de la répartition des charges par poste si présente
+            fixed_text = re.sub(r'"Répartition des charges par poste":\s*"([^"]*)"', 
+                               lambda m: f'"Répartition des charges par poste": {{{m.group(1)}}}', 
+                               fixed_text)
+            
+            # Convertir les nombres avec virgule en nombres avec point
             fixed_text = convert_numbers_in_json(fixed_text)
-            return json.loads(fixed_text)
+            
+            # Corriger les guillemets dans les valeurs de répartition
+            fixed_text = re.sub(r'"([^"]+)":\s*"(\d+)[,.](\d+)"', r'"\1": \2.\3', fixed_text)
+            
+            result = json.loads(fixed_text)
+            return traiter_repartition_charges(result)
         except json.JSONDecodeError:
             pass
         
@@ -409,7 +471,8 @@ class ChargesAnalyzer:
                 return num_str  # Sans guillemets
             
             numeric_fixed_text = re.sub(number_pattern, replace_quoted_numbers, cleaned_text)
-            return json.loads(numeric_fixed_text)
+            result = json.loads(numeric_fixed_text)
+            return traiter_repartition_charges(result)
         except json.JSONDecodeError:
             pass
         
@@ -421,7 +484,8 @@ class ChargesAnalyzer:
                 json_str = match.group(1)
                 # Convertir les nombres avec virgule
                 json_str = convert_numbers_in_json(json_str)
-                return json.loads(json_str)
+                result = json.loads(json_str)
+                return traiter_repartition_charges(result)
         except json.JSONDecodeError:
             pass
         
@@ -440,297 +504,335 @@ class ChargesAnalyzer:
             # Remplacer "POSTE": "3903,08" par "POSTE": 3903.08 (sans guillemets)
             corrected_text = re.sub(r'"([^"]+)"\s*:\s*"(\d+)[,.](\d+)"', r'"\1": \2.\3', corrected_text)
             
-            return json.loads(corrected_text)
+            result = json.loads(corrected_text)
+            return traiter_repartition_charges(result)
         except json.JSONDecodeError:
             # Afficher le texte corrigé en cas d'échec avec une clé unique
             st.text_area("Tentative de correction JSON échouée:", corrected_text, height=200, key="json_error_text_2")
             pass
         
+        # Approche 7: Extraction manuelle pour le document spécifique si toutes les autres méthodes échouent
+        try:
+            # Cette approche est un dernier recours lorsque nous sommes sûrs du format du document
+            # Elle est utile pour les documents qui suivent toujours le même modèle
+            manual_json = self._extract_reddition_charges_manually(text)
+            if manual_json:
+                return manual_json
+        except Exception as e:
+            st.error(f"Erreur lors de l'extraction manuelle: {str(e)}")
+        
         # Si toutes les tentatives échouent
         return None
-    
-    def _extract_charges_data(self, text):
+
+    def _extract_reddition_charges_manually(self, text):
         """
-        Méthode d'extraction directe des données de charges sans recourir à l'API.
-        Particulièrement utile pour les formats standards comme les redditions de charges.
+        Extraction manuelle des informations d'une reddition de charges
+        en fonction du format du document.
         
         Args:
             text (str): Le texte extrait du document.
             
         Returns:
-            dict: Les informations extraites.
+            dict: Les informations extraites ou None si l'extraction échoue.
         """
-        # Déterminer le type de document
-        type_document = "Non spécifié"
-        if "REDDITION" in text or "reddition" in text.lower():
-            type_document = "Reddition de charges"
-        elif "APPEL DE CHARGES" in text or "appel de charges" in text.lower():
-            type_document = "Appel de charges"
-        elif "BUDGET PRÉVISIONNEL" in text or "budget prévisionnel" in text.lower():
-            type_document = "Budget prévisionnel"
-            
+        # Détecter le type de document
+        type_document = "Reddition de charges" if "REDDITION" in text or "reddition" in text.lower() else "Non spécifié"
+        
         # Extraire la période concernée
         periode = "Non spécifiée"
-        periode_pattern = r'[Pp]ériode du (\d{2}/\d{2}/\d{4}) au (\d{2}/\d{2}/\d{4})'
-        periode_match = re.search(periode_pattern, text)
+        periode_match = re.search(r'[Pp]ériode du (\d{2}/\d{2}/\d{4}) au (\d{2}/\d{2}/\d{4})', text)
         if periode_match:
             periode = f"{periode_match.group(1)} au {periode_match.group(2)}"
-            
-        # Extraire le montant total des charges
-        montant_total = "Non spécifié"
-        # Plusieurs patterns possibles selon le format du document
-        patterns_montant = [
-            r'Total charges\s+([0-9\s]+[,.]\d{2})',
-            r'Charges\s+([0-9\s]+[,.]\d{2}\s*€?)',
-            r'REDDITION CHARGES[^\n]+\s+([0-9\s]+[,.]\d{2}\s*€?)'
-        ]
         
-        for pattern in patterns_montant:
+        # Extraire le montant total des charges
+        montant_total = None
+        # Plusieurs patterns possibles
+        for pattern in [
+            r'Total charges\s+(\d+[\s\xa0]*\d*[,.]\d{2})',
+            r'Charges\s+(\d+[\s\xa0]*\d*[,.]\d{2})',
+            r'Total Chap[\.\s]+\d+[\s\-]+[A-Z\s]+\s+(\d+[\s\xa0]*\d*[,.]\d{2})'
+        ]:
             match = re.search(pattern, text)
             if match:
-                montant_total = match.group(1).replace(' ', '').replace('€', '')
-                break
-                
-        # Extraire le montant des provisions versées
-        provisions = "Non spécifié"
-        provisions_pattern = r'Provisions\s+(-?[0-9\s]+[,.]\d{2}\s*€?)'
-        provisions_match = re.search(provisions_pattern, text)
+                valeur = match.group(1).replace(' ', '').replace('\xa0', '').replace(',', '.')
+                try:
+                    montant_total = float(valeur)
+                    break
+                except ValueError:
+                    continue
+        
+        # Extraire les provisions versées
+        provisions = None
+        provisions_match = re.search(r'Provisions\s+(-?\d+[\s\xa0]*\d*[,.]\d{2})', text)
         if provisions_match:
-            provisions = provisions_match.group(1).replace(' ', '').replace('€', '')
-            
+            valeur = provisions_match.group(1).replace(' ', '').replace('\xa0', '').replace(',', '.')
+            try:
+                provisions = float(valeur)
+            except ValueError:
+                provisions = "Non spécifié"
+        
         # Extraire le solde
-        solde = "Non spécifié"
-        solde_pattern = r'Solde\s+(-?[0-9\s]+[,.]\d{2}\s*€?)'
-        solde_match = re.search(solde_pattern, text)
+        solde = None
+        solde_match = re.search(r'Solde\s+(-?\d+[\s\xa0]*\d*[,.]\d{2})', text)
         if solde_match:
-            solde = solde_match.group(1).replace(' ', '').replace('€', '')
-            
-        # Extraire la quote-part du locataire
+            valeur = solde_match.group(1).replace(' ', '').replace('\xa0', '').replace(',', '.')
+            try:
+                solde = float(valeur)
+            except ValueError:
+                solde = "Non spécifié"
+        
+        # Extraire la quote-part
         quote_part = "Non spécifiée"
-        if "Tantièmes" in text and "Quote-part" in text:
-            # Rechercher les tantièmes spécifiques au locataire
-            tantiemes_pattern = r'(\d+)\s+(\d+\.\d{2})\s+365\s+'
-            tantiemes_match = re.search(tantiemes_pattern, text)
+        if "Tantièmes" in text:
+            # Format: "8565    2092.00    365"
+            tantiemes_match = re.search(r'(\d+)\s+(\d+\.\d{2})\s+365', text)
             if tantiemes_match:
                 quote_part = f"{tantiemes_match.group(1)}/{tantiemes_match.group(2)} (365 jours)"
-                
+        
         # Extraire la répartition des charges par poste
         repartition_charges = {}
-        charges_pattern = r'(\d{2} / \d{2}|\d{2}/\d{2})\s+([A-Z\s/&.]+)(?:\s+)([0-9\s]+[,.]\d{2}\s*€?)(?:\s+\d+\s+[\d.]+\s+\d+\s+)([0-9\s]+[,.]\d{2})'
         
-        for match in re.finditer(charges_pattern, text):
-            poste = match.group(2).strip()
-            montant = match.group(4).replace(' ', '')
-            repartition_charges[poste] = montant
+        # Ce patron recherche les lignes comme "NETTOYAGE EXTERIEUR    15 979,86 €    8565    2092.00    365    3 903,08"
+        # [poste]    [montant total]    [tantièmes]    [tantièmes]    [jours]    [montant locataire]
+        charges_lines = re.findall(r'(\d{2}\s*/\s*\d{2}|\d{2}/\d{2})\s+([A-ZÀ-Ú\s/&.]+)\s+(\d+[\s\xa0]*\d*[,.]\d{2})', text)
+        
+        for match in charges_lines:
+            code_poste = match[0].strip()
+            poste = match[1].strip()
             
-        # Extraire le montant facturé au locataire
-        montant_facture = "Non spécifié"
-        if type_document == "Reddition de charges" and solde != "Non spécifié":
-            # Pour une reddition, le montant facturé est le solde
-            montant_facture = solde
-            
-        result = {
+            # Chercher le montant spécifique du locataire (généralement à la fin de la ligne)
+            poste_line = re.search(f"{re.escape(poste)}.*?(\d+[\s\xa0]*\d*[,.]\d{{2}})\s*$", text, re.MULTILINE)
+            if poste_line:
+                montant_str = poste_line.group(1).replace(' ', '').replace('\xa0', '').replace(',', '.')
+                try:
+                    montant = float(montant_str)
+                    repartition_charges[poste] = montant
+                except ValueError:
+                    continue
+        
+        # Si aucune répartition n'a été trouvée, essayer une approche plus générique
+        if not repartition_charges:
+            # Chercher des lignes contenant des postes et des montants
+            charge_lines = re.findall(r'([A-ZÀ-Ú\s/&.]+)\s+(\d+[\s\xa0]*\d*[,.]\d{2})\s*€?\s*', text)
+            for poste, montant_str in charge_lines:
+                poste = poste.strip()
+                if poste and len(poste) > 3:  # Éviter les faux positifs
+                    try:
+                        montant = float(montant_str.replace(' ', '').replace('\xa0', '').replace(',', '.'))
+                        repartition_charges[poste] = montant
+                    except ValueError:
+                        continue
+        
+        # Construire le résultat final
+        resultat = {
             "Type de document": type_document,
             "Année ou période concernée": periode,
-            "Montant total des charges": montant_total,
+            "Montant total des charges": montant_total if montant_total is not None else "Non spécifié",
             "Répartition des charges par poste": repartition_charges,
             "Quote-part du locataire": quote_part,
-            "Montant facturé au locataire": montant_facture,
-            "Montant des provisions déjà versées": provisions,
-            "Solde": solde
+            "Montant facturé au locataire": solde if solde is not None else "Non spécifié",
+            "Montant des provisions déjà versées": provisions if provisions is not None else "Non spécifié",
+            "Solde": solde if solde is not None else "Non spécifié"
         }
         
-        return result
+        return resultat
+    
+    def _extract_charges_data(self, text):
+    """
+    Méthode d'extraction directe des données de charges sans recourir à l'API.
+    Version améliorée qui traite les différents formats de documents de charges.
+    
+    Args:
+        text (str): Le texte extrait du document.
         
-    def _is_extraction_complete(self, result):
-        """
-        Vérifie si l'extraction directe a donné des résultats satisfaisants.
+    Returns:
+        dict: Les informations extraites.
+    """
+    import re
+    
+    # Normaliser les espaces et les caractères spéciaux
+    text = text.replace('\xa0', ' ')
+    
+    # Détecter le type de document
+    type_document = "Non spécifié"
+    if "REDDITION" in text or "reddition" in text.lower():
+        type_document = "Reddition de charges"
+    elif "APPEL DE CHARGES" in text or "appel de charges" in text.lower():
+        type_document = "Appel de charges"
+    elif "BUDGET PRÉVISIONNEL" in text or "budget prévisionnel" in text.lower():
+        type_document = "Budget prévisionnel"
         
-        Args:
-            result (dict): Les résultats de l'extraction.
+    # Extraire la période concernée
+    periode = "Non spécifiée"
+    periode_patterns = [
+        r'[Pp]ériode du (\d{2}/\d{2}/\d{4}) au (\d{2}/\d{2}/\d{4})',
+        r'[Pp]ériode\s*:\s*(\d{2}/\d{2}/\d{4}) au (\d{2}/\d{2}/\d{4})',
+        r'du (\d{2}/\d{2}/\d{4}) au (\d{2}/\d{2}/\d{4})'
+    ]
+    
+    for pattern in periode_patterns:
+        periode_match = re.search(pattern, text)
+        if periode_match:
+            periode = f"{periode_match.group(1)} au {periode_match.group(2)}"
+            break
             
-        Returns:
-            bool: True si l'extraction est complète, False sinon.
-        """
-        # Vérifier que les champs essentiels contiennent des informations
-        essential_fields = [
-            "Type de document", 
-            "Montant total des charges", 
-            "Solde"
+    # Extraire le montant total des charges
+    montant_total = "Non spécifié"
+    # Plusieurs patterns possibles selon le format du document
+    patterns_montant = [
+        r'Total charges\s+([0-9\s]+[,.]\d{2})',
+        r'Charges\s+([0-9\s]+[,.]\d{2}\s*€?)',
+        r'REDDITION CHARGES[^\n]+\s+([0-9\s]+[,.]\d{2}\s*€?)',
+        r'Total clé.*?CHARGES COMMUNES\s+([0-9\s]+[,.]\d{2})',
+        r'Total Chap\. \d+ [A-Z\s]+\s+([0-9\s]+[,.]\d{2})'
+    ]
+    
+    for pattern in patterns_montant:
+        match = re.search(pattern, text)
+        if match:
+            montant_str = match.group(1).replace(' ', '').replace(',', '.').replace('€', '')
+            try:
+                montant_total = float(montant_str)
+            except ValueError:
+                montant_total = montant_str
+            break
+            
+    # Extraire le montant des provisions versées
+    provisions = "Non spécifié"
+    provisions_patterns = [
+        r'Provisions\s+(-?[0-9\s]+[,.]\d{2}\s*€?)',
+        r'RBT PROV\. CHARGES.*?(-[0-9\s]+[,.]\d{2})',
+        r'Provisions déjà versées\s+(-?[0-9\s]+[,.]\d{2})'
+    ]
+    
+    for pattern in provisions_patterns:
+        provisions_match = re.search(pattern, text)
+        if provisions_match:
+            provisions_str = provisions_match.group(1).replace(' ', '').replace(',', '.').replace('€', '')
+            try:
+                provisions = float(provisions_str)
+            except ValueError:
+                provisions = provisions_str
+            break
+            
+    # Extraire le solde
+    solde = "Non spécifié"
+    solde_patterns = [
+        r'Solde\s+(-?[0-9\s]+[,.]\d{2}\s*€?)',
+        r'SOLDE\s+(-?[0-9\s]+[,.]\d{2})',
+        r'Total H\.T\.\s*:\s*(-?[0-9\s]+[,.]\d{2})\s*€?',
+        r'Total\s*:\s*(-?[0-9\s]+[,.]\d{2})\s*€?'
+    ]
+    
+    for pattern in solde_patterns:
+        solde_match = re.search(pattern, text)
+        if solde_match:
+            solde_str = solde_match.group(1).replace(' ', '').replace(',', '.').replace('€', '')
+            try:
+                solde = float(solde_str)
+            except ValueError:
+                solde = solde_str
+            break
+            
+    # Extraire la quote-part du locataire
+    quote_part = "Non spécifiée"
+    
+    # Différents formats possibles
+    if "Tantièmes" in text and ("particuliers" in text or "Quote-part" in text):
+        # Format tableau avec tantièmes
+        # Rechercher les tantièmes spécifiques au locataire
+        tantiemes_pattern = r'(\d+)\s+(\d+\.\d{2})\s+365\s+'
+        tantiemes_match = re.search(tantiemes_pattern, text)
+        if tantiemes_match:
+            quote_part = f"{tantiemes_match.group(1)}/{tantiemes_match.group(2)} (365 jours)"
+    elif "Quote-part" in text or "quote-part" in text.lower():
+        # Autres formats de quote-part
+        quote_part_pattern = r'[Qq]uote-part\s*:?\s*(\d+[,.]\d+\s*%)'
+        quote_part_match = re.search(quote_part_pattern, text)
+        if quote_part_match:
+            quote_part = quote_part_match.group(1)
+            
+    # Extraire la répartition des charges par poste
+    repartition_charges = {}
+    
+    # Plusieurs patterns possibles selon le format du document
+    
+    # 1. Format avec codes de postes (ex: 01/01 NETTOYAGE EXTERIEUR)
+    charges_pattern_1 = r'(\d{2}\s*/\s*\d{2}|\d{2}/\d{2})\s+([A-ZÀ-Ú\s/&.]+)(?:\s+)(\d+[\s\xa0]*\d*[,.]\d{2}\s*€?)(?:.*?)(\d+[\s\xa0]*\d*[,.]\d{2})'
+    
+    for match in re.finditer(charges_pattern_1, text):
+        poste = match.group(2).strip()
+        montant_str = match.group(4).replace(' ', '').replace('\xa0', '').replace(',', '.')
+        try:
+            montant = float(montant_str)
+            repartition_charges[poste] = montant
+        except ValueError:
+            continue
+    
+    # 2. Format sans code, directement le nom du poste et le montant
+    if not repartition_charges:
+        charges_pattern_2 = r'([A-ZÀ-Ú\s/&.]{5,})\s+(\d+[\s\xa0]*\d*[,.]\d{2})\s*€?\s*
+        
+        for match in re.finditer(charges_pattern_2, text, re.MULTILINE):
+            poste = match.group(1).strip()
+            # Éviter les faux positifs (lignes de total, etc.)
+            if poste in ["TOTAL", "SOLDE", "PROVISIONS", "TOTAL CHARGES"]:
+                continue
+                
+            montant_str = match.group(2).replace(' ', '').replace('\xa0', '').replace(',', '.')
+            try:
+                montant = float(montant_str)
+                repartition_charges[poste] = montant
+            except ValueError:
+                continue
+    
+    # 3. Format tableau avec tantièmes (comme dans le document fourni)
+    if not repartition_charges:
+        # Format: "POSTE    MONTANT_TOTAL    8565    2092.00    365    MONTANT_LOCATAIRE"
+        charges_pattern_3 = r'([A-ZÀ-Ú\s/&.]{5,})\s+\d+[\s\xa0]*\d*[,.]\d{2}\s*€?\s+\d+\s+[\d\.]+\s+\d+\s+(\d+[\s\xa0]*\d*[,.]\d{2})'
+        
+        for match in re.finditer(charges_pattern_3, text):
+            poste = match.group(1).strip()
+            montant_str = match.group(2).replace(' ', '').replace('\xa0', '').replace(',', '.')
+            try:
+                montant = float(montant_str)
+                repartition_charges[poste] = montant
+            except ValueError:
+                continue
+    
+    # Extraire le montant facturé au locataire
+    montant_facture = "Non spécifié"
+    
+    # Pour une reddition, le montant facturé est généralement le solde
+    if type_document == "Reddition de charges" and solde != "Non spécifié":
+        montant_facture = solde
+    else:
+        # Autres formats possibles
+        facture_patterns = [
+            r'[Mm]ontant (?:à payer|facturé)\s*:?\s*(-?[0-9\s]+[,.]\d{2}\s*€?)',
+            r'Total T\.T\.C\.\s*:?\s*(-?[0-9\s]+[,.]\d{2}\s*€?)'
         ]
         
-        for field in essential_fields:
-            if field not in result or result[field] == "Non spécifié":
-                return False
-                
-        # Vérifier qu'il y a au moins quelques postes de charges
-        if "Répartition des charges par poste" not in result or len(result["Répartition des charges par poste"]) < 2:
-            return False
-            
-        return True
-
-def download_json(data):
-    """Génère un lien de téléchargement pour les résultats au format JSON."""
-    json_str = json.dumps(data, indent=2, ensure_ascii=False)
-    b64 = base64.b64encode(json_str.encode()).decode()
-    href = f'<a href="data:application/json;base64,{b64}" download="resultats_analyse.json">Télécharger les résultats (JSON)</a>'
-    return href
-
-def display_results(results):
-    """Affiche les résultats de manière structurée et claire."""
-    if "error" in results:
-        st.error(f"Erreur lors de l'analyse: {results['error']}")
-        if "raw_response" in results:
-            st.text_area("Réponse brute:", results["raw_response"], height=300, key="raw_response_display_1")
-        return
+        for pattern in facture_patterns:
+            facture_match = re.search(pattern, text)
+            if facture_match:
+                montant_str = facture_match.group(1).replace(' ', '').replace(',', '.').replace('€', '')
+                try:
+                    montant_facture = float(montant_str)
+                except ValueError:
+                    montant_facture = montant_str
+                break
     
-    # Normaliser les clés pour gérer différentes nomenclatures
-    normalized_results = {}
-    
-    # Mapping des clés possibles vers les clés standardisées
-    key_mapping = {
-        # Clés en format standard
-        "Type de document": ["Type de document", "type_document", "type de document"],
-        "Année ou période concernée": ["Année ou période concernée", "periode_concernee", "période concernée"],
-        "Montant total des charges": ["Montant total des charges", "montant_total_charges", "montant total des charges"],
-        "Répartition des charges par poste": ["Répartition des charges par poste", "repartition_charges_par_poste"],
-        "Quote-part du locataire": ["Quote-part du locataire", "quote_part_locataire", "quote-part du locataire"],
-        "Montant facturé au locataire": ["Montant facturé au locataire", "montant_facture_locataire"],
-        "Montant des provisions déjà versées": ["Montant des provisions déjà versées", "montant_provisions_deja_versees"],
-        "Solde": ["Solde", "solde"]
+    # Construire le résultat
+    result = {
+        "Type de document": type_document,
+        "Année ou période concernée": periode,
+        "Montant total des charges": montant_total,
+        "Répartition des charges par poste": repartition_charges,
+        "Quote-part du locataire": quote_part,
+        "Montant facturé au locataire": montant_facture,
+        "Montant des provisions déjà versées": provisions,
+        "Solde": solde
     }
     
-    # Normaliser les clés
-    for standard_key, possible_keys in key_mapping.items():
-        for key in possible_keys:
-            if key.lower() in [k.lower() for k in results.keys()]:
-                # Trouver la clé exacte (respectant la casse)
-                actual_key = next(k for k in results.keys() if k.lower() == key.lower())
-                normalized_results[standard_key] = results[actual_key]
-                break
-        if standard_key not in normalized_results:
-            normalized_results[standard_key] = "Non spécifié"
-    
-    st.markdown("## Résultats de l'analyse")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### Informations générales")
-        st.info(f"**Type de document:** {normalized_results.get('Type de document', 'Non spécifié')}")
-        st.info(f"**Période concernée:** {normalized_results.get('Année ou période concernée', 'Non spécifiée')}")
-        st.info(f"**Montant total des charges:** {normalized_results.get('Montant total des charges', 'Non spécifié')}")
-    
-    with col2:
-        st.markdown("### Informations financières")
-        st.info(f"**Quote-part du locataire:** {normalized_results.get('Quote-part du locataire', 'Non spécifiée')}")
-        st.info(f"**Montant facturé au locataire:** {normalized_results.get('Montant facturé au locataire', 'Non spécifié')}")
-        st.info(f"**Provisions déjà versées:** {normalized_results.get('Montant des provisions déjà versées', 'Non spécifié')}")
-        st.info(f"**Solde:** {normalized_results.get('Solde', 'Non spécifié')}")
-    
-    # Afficher la répartition des charges si disponible
-    repartition_key = "Répartition des charges par poste"
-    if repartition_key in normalized_results and normalized_results[repartition_key]:
-        st.markdown("### Répartition des charges par poste")
-        
-        # Convertir en dictionnaire si ce n'est pas déjà le cas
-        repartition = normalized_results[repartition_key]
-        if isinstance(repartition, str):
-            try:
-                repartition = json.loads(repartition)
-            except:
-                pass
-        
-        if isinstance(repartition, dict):
-            # Créer un DataFrame pour l'affichage
-            df = pd.DataFrame({
-                'Poste': list(repartition.keys()),
-                'Montant': list(repartition.values())
-            })
-            
-            # Afficher le tableau
-            st.dataframe(df)
-        else:
-            st.write(repartition)
-    
-    # Afficher le JSON brut pour le débogage
-    with st.expander("Voir les résultats JSON bruts"):
-        st.json(results)
-    
-    # Bouton de téléchargement des résultats
-    st.markdown(download_json(results), unsafe_allow_html=True)
-
-def main():
-    """Fonction principale de l'application Streamlit."""
-    st.title("Analyseur de Redditions de Charges")
-    st.markdown("""
-    Cette application analyse précisément vos tableaux de charges et redditions de charges pour des baux commerciaux.
-    Téléchargez un fichier PDF, Excel ou CSV et obtenez une analyse complète.
-    """)
-    
-    # Récupération de la clé API depuis les secrets de Streamlit
-    try:
-        api_key = st.secrets["OPENAI_API_KEY"]
-        st.sidebar.success("✅ Clé API OpenAI trouvée dans les secrets")
-    except Exception as e:
-        st.sidebar.warning("⚠️ Clé API OpenAI non trouvée dans les secrets")
-        api_key = st.text_input("Clé API OpenAI", type="password")
-    
-    # Informations dans la sidebar
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("""
-    ### À propos
-    Cette application permet d'analyser automatiquement :
-    - Redditions de charges
-    - Appels de charges
-    - Budgets prévisionnels
-    
-    ### Formats supportés
-    - PDF (avec OCR)
-    - Excel (.xlsx, .xls)
-    - CSV
-    """)
-    
-    # Zone principale
-    uploaded_file = st.file_uploader("Choisissez un fichier à analyser", type=["pdf", "xlsx", "xls", "csv"])
-    
-    if uploaded_file is not None:
-        # Afficher des informations sur le fichier téléchargé
-        file_details = {
-            "Nom du fichier": uploaded_file.name,
-            "Type de fichier": uploaded_file.type,
-            "Taille": f"{uploaded_file.size / 1024:.1f} KB"
-        }
-        
-        st.info(f"**Fichier chargé:** {file_details['Nom du fichier']} ({file_details['Taille']})")
-        
-        # Bouton pour lancer l'analyse
-        if st.button("Analyser le document"):
-            if not api_key:
-                st.error("⚠️ Veuillez fournir une clé API OpenAI.")
-            else:
-                try:
-                    # Afficher un spinner pendant l'analyse
-                    with st.spinner("Analyse en cours, veuillez patienter..."):
-                        # Initialiser l'analyseur
-                        analyzer = ChargesAnalyzer(api_key=api_key)
-                        
-                        # Traiter le fichier
-                        results = analyzer.process_file(uploaded_file)
-                        
-                        # Afficher les résultats
-                        display_results(results)
-                except Exception as e:
-                    st.error(f"Une erreur est survenue: {str(e)}")
-                    # Utiliser une clé unique pour l'affichage de l'erreur
-                    st.exception(e)  # Affiche la trace complète de l'erreur pour le débogage
-
-if __name__ == "__main__":
-    # Vérifier si tesseract est installé
-    try:
-        pytesseract.get_tesseract_version()
-    except Exception as e:
-        st.warning(f"Tesseract OCR n'est pas correctement configuré: {str(e)}")
-        st.info("Sur Streamlit Cloud, ajoutez 'tesseract-ocr' à votre packages.txt")
-    
-    main()
+    return result
