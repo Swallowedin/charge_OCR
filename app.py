@@ -336,7 +336,7 @@ class ChargesAnalyzer:
                 return analysis_result
             else:
                 st.error("Impossible d'extraire un JSON valide de la réponse")
-                st.text_area("Réponse brute:", analysis_text, height=300, key="raw_response_error")
+                st.text_area("Réponse brute:", analysis_text, height=300, key="raw_response_error_1")
                 return {"error": "Format de réponse invalide", "raw_response": analysis_text}
             
         except Exception as e:
@@ -371,7 +371,8 @@ class ChargesAnalyzer:
                 json_str = cleaned_text[start_idx:end_idx]
                 return json.loads(json_str)
         except json.JSONDecodeError:
-            st.text_area("Texte JSON problématique:", json_str, height=200, key="json_error_text")
+            # Utiliser une clé unique pour chaque affichage de texte
+            st.text_area("Texte JSON problématique:", cleaned_text, height=200, key="json_error_text_1")
             pass
         
         # Approche 3: Correction des problèmes de guillemets potentiels
@@ -401,6 +402,8 @@ class ChargesAnalyzer:
             corrected_text = re.sub(r'(\w+):', r'"\1":', corrected_text)
             return json.loads(corrected_text)
         except json.JSONDecodeError:
+            # Afficher le texte corrigé en cas d'échec avec une clé unique
+            st.text_area("Tentative de correction JSON échouée:", corrected_text, height=200, key="json_error_text_2")
             pass
         
         # Si toutes les tentatives échouent
@@ -538,7 +541,7 @@ def display_results(results):
     if "error" in results:
         st.error(f"Erreur lors de l'analyse: {results['error']}")
         if "raw_response" in results:
-            st.text_area("Réponse brute:", results["raw_response"], height=300, key="raw_response_display")
+            st.text_area("Réponse brute:", results["raw_response"], height=300, key="raw_response_display_1")
         return
     
     # Normaliser les clés pour gérer différentes nomenclatures
@@ -679,6 +682,7 @@ def main():
                         display_results(results)
                 except Exception as e:
                     st.error(f"Une erreur est survenue: {str(e)}")
+                    # Utiliser une clé unique pour l'affichage de l'erreur
                     st.exception(e)  # Affiche la trace complète de l'erreur pour le débogage
 
 if __name__ == "__main__":
