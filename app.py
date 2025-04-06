@@ -356,6 +356,17 @@ class ChargesAnalyzer:
         # Supprimer tous les backticks et mentions "json"
         cleaned_text = text.replace('```json', '').replace('```', '').replace('json', '').strip()
         
+        # Prétraitement pour convertir les nombres avec format français (virgule) en format anglo-saxon (point)
+        # Cette étape est cruciale pour éviter l'erreur "Invalid format specifier"
+        def convert_numbers_in_json(json_text):
+            # Fonction pour remplacer les nombres avec virgule par des nombres avec point dans un JSON
+            # Pattern qui cherche des nombres (ex: 3903,08) suivis d'une virgule ou d'un '}' ou d'un ']'
+            pattern = r'(\d+),(\d+)(?=\s*[,}\]])'
+            return re.sub(pattern, r'\1.\2', json_text)
+        
+        # Appliquer la conversion des nombres
+        cleaned_text = convert_numbers_in_json(cleaned_text)
+        
         # Approche 1: Essayer de charger directement le texte nettoyé
         try:
             return json.loads(cleaned_text)
@@ -369,30 +380,52 @@ class ChargesAnalyzer:
             
             if start_idx >= 0 and end_idx > start_idx:
                 json_str = cleaned_text[start_idx:end_idx]
+                # Convertir les nombres avec virgule
+                json_str = convert_numbers_in_json(json_str)
                 return json.loads(json_str)
         except json.JSONDecodeError:
             # Utiliser une clé unique pour chaque affichage de texte
             st.text_area("Texte JSON problématique:", cleaned_text, height=200, key="json_error_text_1")
             pass
         
-        # Approche 3: Correction des problèmes de guillemets potentiels
+        # Approche 3: Correction des problèmes de guillemets et virgules dans les nombres
         try:
             # Remplacer les guillemets simples par des guillemets doubles
             fixed_text = cleaned_text.replace("'", '"')
+            # Convertir les nombres avec virgule
+            fixed_text = convert_numbers_in_json(fixed_text)
             return json.loads(fixed_text)
         except json.JSONDecodeError:
             pass
         
-        # Approche 4: Utiliser une expression régulière pour extraire le JSON
+        # Approche 4: Transformer manuellement le format des valeurs numériques
+        try:
+            # Remplacer les valeurs numériques qui sont entre guillemets
+            number_pattern = r'"(\d+[,.]\d+)"'
+            
+            def replace_quoted_numbers(match):
+                # Remplacer la virgule par un point et enlever les guillemets
+                num_str = match.group(1).replace(',', '.')
+                return num_str  # Sans guillemets
+            
+            numeric_fixed_text = re.sub(number_pattern, replace_quoted_numbers, cleaned_text)
+            return json.loads(numeric_fixed_text)
+        except json.JSONDecodeError:
+            pass
+        
+        # Approche 5: Utiliser une expression régulière pour extraire le JSON
         try:
             json_pattern = r'(\{.*\})'
             match = re.search(json_pattern, cleaned_text, re.DOTALL)
             if match:
-                return json.loads(match.group(1))
+                json_str = match.group(1)
+                # Convertir les nombres avec virgule
+                json_str = convert_numbers_in_json(json_str)
+                return json.loads(json_str)
         except json.JSONDecodeError:
             pass
         
-        # Approche 5: Tentative de correction manuelle de formats JSON courants
+        # Approche 6: Tentative de correction manuelle de formats JSON courants
         try:
             # Correction de certaines erreurs de formatage fréquentes
             corrected_text = cleaned_text
@@ -400,6 +433,13 @@ class ChargesAnalyzer:
             corrected_text = re.sub(r',\s*}', '}', corrected_text)
             # Ajouter des guillemets aux clés non quotées
             corrected_text = re.sub(r'(\w+):', r'"\1":', corrected_text)
+            # Convertir tous les nombres avec virgule en format point
+            corrected_text = convert_numbers_in_json(corrected_text)
+            
+            # Tentative supplémentaire pour corriger le format de nombres dans les valeurs
+            # Remplacer "POSTE": "3903,08" par "POSTE": 3903.08 (sans guillemets)
+            corrected_text = re.sub(r'"([^"]+)"\s*:\s*"(\d+)[,.](\d+)"', r'"\1": \2.\3', corrected_text)
+            
             return json.loads(corrected_text)
         except json.JSONDecodeError:
             # Afficher le texte corrigé en cas d'échec avec une clé unique
