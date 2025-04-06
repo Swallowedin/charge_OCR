@@ -771,7 +771,7 @@ class ChargesAnalyzer:
     
     # 2. Format sans code, directement le nom du poste et le montant
     if not repartition_charges:
-        charges_pattern_2 = r'([A-ZÀ-Ú\s/&.]{5,})\s+(\d+[\s\xa0]*\d*[,.]\d{2})\s*€?\s*
+        charges_pattern_2 = r'([A-ZÀ-Ú\s/&.]{5,})\s+(\d+[\s\xa0]*\d*[,.]\d{2})\s*€?\s*$'
         
         for match in re.finditer(charges_pattern_2, text, re.MULTILINE):
             poste = match.group(1).strip()
