@@ -11,6 +11,7 @@ import pytesseract
 from pdf2image import convert_from_bytes
 import openai
 import plotly.express as px
+import requests
 
 # Configuration de la page Streamlit
 st.set_page_config(page_title="Analyseur de reddition de charges", layout="wide")
@@ -272,7 +273,7 @@ if uploaded_file is not None:
                 st.error("Impossible de traiter le PDF. Vérifiez que le fichier est valide.")
     except Exception as e:
         st.error(f"Une erreur est survenue : {e}")
-        st.info("Vérifiez que la clé API OpenAI est correctement configurée dans les secrets Streamlit.")
+        st.info("Vérifiez que les secrets sont correctement configurés dans Streamlit Cloud.")
 
 # Ajout d'un footer
 st.markdown("---")
